@@ -1,0 +1,995 @@
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  StatusBar,
+  Switch,
+  Modal,
+  TouchableWithoutFeedback,
+  Alert,
+  Platform,
+} from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { useNavigation } from "@react-navigation/native";
+import { Ionicons, MaterialIcons, FontAwesome5, Feather } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { upsertPatient, toYMD } from "../db/sqlite";
+import DateTimePicker from '@react-native-community/datetimepicker';
+
+type PatientFormScreenProps = { route: any };
+export default function PatientFormScreen({ route }: PatientFormScreenProps) {
+  const navigation = useNavigation<any>();
+  const [activeSection, setActiveSection] = useState("demographics");
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [currentDateField, setCurrentDateField] = useState("");
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Get patient data from route params (if editing)
+  const patientFromRoute = route.params?.patient;
+
+  // Form state - initialize with patient data if available
+  const [formData, setFormData] = useState({
+    // Patient Demographics
+    fullName: patientFromRoute?.name || "",
+    age: patientFromRoute?.age?.toString() || "",
+    dateOfBirth: patientFromRoute?.dateOfBirth || "",
+    gender: patientFromRoute?.gender || "",
+    village: patientFromRoute?.village || "",
+    block: patientFromRoute?.territory?.block || "",
+    district: patientFromRoute?.territory?.district || "",
+    contactNumber: patientFromRoute?.contact || "",
+    familyHeadName: patientFromRoute?.familyHeadName || "",
+    householdId: patientFromRoute?.householdId || "",
+
+    // Maternal Health
+    isPregnant: patientFromRoute?.status === "pregnant" || false,
+    pregnancyStatus: patientFromRoute?.pregnancyStatus || "",
+    expectedDeliveryDate: patientFromRoute?.expectedDeliveryDate || "",
+    ancVisitsCompleted: patientFromRoute?.ancVisitsCompleted || "",
+    lastAncDate: patientFromRoute?.lastAncDate || "",
+    supplementation: patientFromRoute?.supplementation || "",
+    referralDetails: patientFromRoute?.referralDetails || "",
+
+    // Child Health
+    childBirthDate: patientFromRoute?.childBirthDate || "",
+    birthWeight: patientFromRoute?.birthWeight || "",
+    immunizationHistory: patientFromRoute?.immunizationHistory || "",
+    lastVaccineDate: patientFromRoute?.lastVaccineDate || "",
+    nextVaccineDate: patientFromRoute?.nextVaccineDate || "",
+    currentWeight: patientFromRoute?.currentWeight || "",
+    currentHeight: patientFromRoute?.currentHeight || "",
+
+    // Health Visits
+    visitDate: patientFromRoute?.visitDate || "",
+    visitType: patientFromRoute?.visitType || "",
+    bloodPressure: patientFromRoute?.bloodPressure || "",
+    pulse: patientFromRoute?.pulse || "",
+    temperature: patientFromRoute?.temperature || "",
+    symptoms: patientFromRoute?.symptoms || "",
+    treatmentGiven: patientFromRoute?.treatmentGiven || "",
+
+    // Reminders
+    vaccinationReminder: patientFromRoute?.vaccinationReminder || "",
+    ancFollowUpReminder: patientFromRoute?.ancFollowUpReminder || "",
+    otherReminders: patientFromRoute?.otherReminders || "",
+  });
+
+  // Fix 1: Proper form data update function
+  const updateFormData = (field: string, value: any) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  // Fix 2: Proper date picker handling
+  const handleDateFieldPress = (field: string) => {
+    // Set current date based on existing value or use today's date
+    const existingDate = formData[field];
+    if (existingDate) {
+      // Parse existing date string to Date object
+      const [year, month, day] = existingDate.split('-').map(Number);
+      setSelectedDate(new Date(year, month - 1, day));
+    } else {
+      setSelectedDate(new Date());
+    }
+    setCurrentDateField(field);
+    setShowDatePicker(true);
+  };
+
+  const handleDateChange = (event: any, date?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+    }
+    
+    if (date) {
+      setSelectedDate(date);
+    }
+  };
+
+  const handleDateConfirm = () => {
+    updateFormData(currentDateField, toYMD(selectedDate));
+    setShowDatePicker(false);
+  };
+
+  const handleDateCancel = () => {
+    setShowDatePicker(false);
+  };
+
+  const handleSave = async () => {
+    // Basic validation
+    if (!formData.fullName.trim()) {
+      Alert.alert("Validation Error", "Please enter patient's full name");
+      return;
+    }
+
+    if (!formData.village.trim()) {
+      Alert.alert("Validation Error", "Please enter village name");
+      return;
+    }
+
+    setIsSaving(true);
+
+    try {
+      const id = patientFromRoute?.id || Date.now().toString();
+      const record = {
+        id,
+        name: formData.fullName,
+        village: formData.village,
+        age: parseInt(formData.age) || 0,
+        gender: formData.gender,
+        lastVisit: toYMD(new Date()),
+        status: determinePatientStatus(formData),
+        nextVisit: calculateNextVisit(formData),
+        contact: formData.contactNumber,
+        territory_state: "Bihar",
+        territory_district: formData.district || "Patna",
+        territory_block: formData.block || "Phulwari",
+        territory_village: formData.village,
+        formData: formData,
+      } as any;
+
+      await upsertPatient(record);
+      Alert.alert("Success", patientFromRoute ? "Patient updated successfully!" : "Patient saved successfully!");
+
+      // Navigate back to patient list
+      navigation.goBack();
+
+    } catch (error) {
+      console.error('Error saving patient:', error);
+      Alert.alert("Error", "Failed to save patient. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Determine patient status based on form data
+  const determinePatientStatus = (patientData: any) => {
+    if (patientData.isPregnant) return "pregnant";
+    if (patientData.childBirthDate) return "child_care";
+    if (patientData.ancVisitsCompleted) return "anc";
+    return "general";
+  };
+
+  // Calculate next visit date
+  const calculateNextVisit = (patientData: any) => {
+    const today = new Date();
+    if (patientData.nextVaccineDate) return patientData.nextVaccineDate;
+    if (patientData.expectedDeliveryDate) return patientData.expectedDeliveryDate;
+
+    // Default: 30 days from now
+    const nextVisit = new Date(today);
+    nextVisit.setDate(today.getDate() + 30);
+    return toYMD(nextVisit);
+  };
+
+  const SectionButton = ({ title, icon, isActive, onPress }: { title: string; icon: React.ReactNode; isActive: boolean; onPress: () => void }) => (
+    <TouchableOpacity
+      style={[styles.sectionButton, isActive && styles.sectionButtonActive]}
+      onPress={onPress}
+    >
+      {icon}
+      <Text style={[styles.sectionButtonText, isActive && styles.sectionButtonTextActive]}>
+        {title}
+      </Text>
+    </TouchableOpacity>
+  );
+
+  // Fix 3: Improved InputField component with better text handling
+  const InputField = ({ 
+    label, 
+    value, 
+    onChangeText, 
+    placeholder, 
+    icon, 
+    multiline = false, 
+    keyboardType = "default" as any,
+    onSubmitEditing = () => {} 
+  }: { 
+    label: string; 
+    value: string; 
+    onChangeText: (t: string) => void; 
+    placeholder?: string; 
+    icon?: React.ReactNode; 
+    multiline?: boolean; 
+    keyboardType?: any;
+    onSubmitEditing?: () => void;
+  }) => (
+    <View style={styles.inputContainer}>
+      <View style={styles.labelContainer}>
+        {icon}
+        <Text style={styles.label}>{label}</Text>
+      </View>
+      <TextInput
+        style={[styles.textInput, multiline && styles.multilineInput]}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#9CA3AF"
+        multiline={multiline}
+        numberOfLines={multiline ? 3 : 1}
+        keyboardType={keyboardType}
+        autoCapitalize={label.toLowerCase().includes('name') || label.toLowerCase().includes('village') ? 'words' : 'none'}
+        autoCorrect={false}
+        returnKeyType={multiline ? 'default' : 'next'}
+        blurOnSubmit={!multiline}
+        onSubmitEditing={onSubmitEditing}
+        // Fix: Add proper text input props to prevent immediate exit
+        contextMenuHidden={false}
+        selectTextOnFocus={true}
+        clearButtonMode="while-editing"
+      />
+    </View>
+  );
+
+  const DateInputField = ({ label, value, onPress, icon }: { label: string; value: string; onPress: () => void; icon?: React.ReactNode }) => (
+    <TouchableOpacity style={styles.inputContainer} onPress={onPress}>
+      <View style={styles.labelContainer}>
+        {icon}
+        <Text style={styles.label}>{label}</Text>
+      </View>
+      <View style={styles.dateInput}>
+        <Text style={[styles.dateInputText, !value && styles.placeholderText]}>
+          {value || "Select date"}
+        </Text>
+        <Feather name="calendar" size={18} color="#6B7280" />
+      </View>
+    </TouchableOpacity>
+  );
+
+  const SaveButton = () => (
+    <TouchableOpacity
+      style={[styles.saveButton, isSaving && styles.saveButtonDisabled]}
+      onPress={handleSave}
+      disabled={isSaving}
+    >
+      <LinearGradient
+        colors={isSaving ? ["#9CA3AF", "#6B7280"] : ["#2563eb", "#1d4ed8"]}
+        style={styles.saveButtonGradient}
+      >
+        <Ionicons name="save" size={18} color="#fff" />
+        <Text style={styles.saveButtonText}>
+          {isSaving ? 'Saving...' : (patientFromRoute ? 'Update' : 'Save') + ' Patient Record'}
+        </Text>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#2563eb" />
+
+      {/* Header */}
+      <LinearGradient colors={["#2563eb", "#1d4ed8"]} style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={22} color="#fff" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>
+          {patientFromRoute ? 'Edit Patient' : 'New Patient Record'}
+        </Text>
+        <View style={styles.placeholder} />
+      </LinearGradient>
+
+      {/* Section Navigation */}
+      <View style={styles.sectionNavContainer}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.sectionNav}>
+          <SectionButton
+            title="Demographics"
+            icon={<Ionicons name="person" size={14} color={activeSection === "demographics" ? "#fff" : "#6B7280"} />}
+            isActive={activeSection === "demographics"}
+            onPress={() => setActiveSection("demographics")}
+          />
+          <SectionButton
+            title="Maternal Health"
+            icon={<FontAwesome5 name="baby" size={12} color={activeSection === "maternal" ? "#fff" : "#6B7280"} />}
+            isActive={activeSection === "maternal"}
+            onPress={() => setActiveSection("maternal")}
+          />
+          <SectionButton
+            title="Child Health"
+            icon={<Ionicons name="medkit" size={14} color={activeSection === "child" ? "#fff" : "#6B7280"} />}
+            isActive={activeSection === "child"}
+            onPress={() => setActiveSection("child")}
+          />
+          <SectionButton
+            title="Health Visits"
+            icon={<Feather name="activity" size={14} color={activeSection === "visits" ? "#fff" : "#6B7280"} />}
+            isActive={activeSection === "visits"}
+            onPress={() => setActiveSection("visits")}
+          />
+          <SectionButton
+            title="Reminders"
+            icon={<Ionicons name="notifications" size={14} color={activeSection === "reminders" ? "#fff" : "#6B7280"} />}
+            isActive={activeSection === "reminders"}
+            onPress={() => setActiveSection("reminders")}
+          />
+        </ScrollView>
+      </View>
+
+      <ScrollView style={styles.formContainer} showsVerticalScrollIndicator={false}>
+
+        {/* Patient Demographics Section */}
+        {activeSection === "demographics" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Ionicons name="person" size={20} color="#2563eb" />
+              <Text style={styles.sectionTitle}>Patient Demographics</Text>
+            </View>
+
+            <InputField
+              label="Full Name *"
+              value={formData.fullName}
+              onChangeText={(text) => updateFormData("fullName", text)}
+              placeholder="Enter patient's full name"
+              icon={<Feather name="user" size={14} color="#6B7280" />}
+            />
+
+            <View style={styles.row}>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="Age"
+                  value={formData.age}
+                  onChangeText={(text) => updateFormData("age", text)}
+                  placeholder="Age in years"
+                  icon={<Feather name="calendar" size={12} color="#6B7280" />}
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={styles.halfInput}>
+                <DateInputField
+                  label="Date of Birth"
+                  value={formData.dateOfBirth}
+                  onPress={() => handleDateFieldPress("dateOfBirth")}
+                  icon={<Feather name="calendar" size={12} color="#6B7280" />}
+                />
+              </View>
+            </View>
+
+            <InputField
+              label="Gender"
+              value={formData.gender}
+              onChangeText={(text) => updateFormData("gender", text)}
+              placeholder="Male / Female / Other"
+              icon={<FontAwesome5 name="transgender" size={12} color="#6B7280" />}
+            />
+
+            <InputField
+              label="Village *"
+              value={formData.village}
+              onChangeText={(text) => updateFormData("village", text)}
+              placeholder="Enter village name"
+              icon={<Ionicons name="location" size={14} color="#6B7280" />}
+            />
+
+            <View style={styles.row}>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="Block"
+                  value={formData.block}
+                  onChangeText={(text) => updateFormData("block", text)}
+                  placeholder="Block name"
+                  icon={<Ionicons name="business" size={12} color="#6B7280" />}
+                />
+              </View>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="District"
+                  value={formData.district}
+                  onChangeText={(text) => updateFormData("district", text)}
+                  placeholder="District name"
+                  icon={<Ionicons name="map" size={12} color="#6B7280" />}
+                />
+              </View>
+            </View>
+
+            <InputField
+              label="Contact Number"
+              value={formData.contactNumber}
+              onChangeText={(text) => updateFormData("contactNumber", text)}
+              placeholder="Phone number"
+              icon={<Feather name="phone" size={14} color="#6B7280" />}
+              keyboardType="phone-pad"
+            />
+
+            <View style={styles.row}>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="Family Head Name"
+                  value={formData.familyHeadName}
+                  onChangeText={(text) => updateFormData("familyHeadName", text)}
+                  placeholder="Head of family"
+                  icon={<Ionicons name="people" size={12} color="#6B7280" />}
+                />
+              </View>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="Household ID"
+                  value={formData.householdId}
+                  onChangeText={(text) => updateFormData("householdId", text)}
+                  placeholder="HH ID number"
+                  icon={<MaterialIcons name="badge" size={12} color="#6B7280" />}
+                />
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Maternal Health Section */}
+        {activeSection === "maternal" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <FontAwesome5 name="baby" size={18} color="#2563eb" />
+              <Text style={styles.sectionTitle}>Maternal Health Details</Text>
+            </View>
+
+            <View style={styles.switchContainer}>
+              <View style={styles.switchLabel}>
+                <FontAwesome5 name="baby" size={14} color="#6B7280" />
+                <Text style={styles.switchText}>Is Patient Pregnant?</Text>
+              </View>
+              <Switch
+                value={formData.isPregnant}
+                onValueChange={(value) => updateFormData("isPregnant", value)}
+                trackColor={{ false: "#D1D5DB", true: "#BFDBFE" }}
+                thumbColor={formData.isPregnant ? "#2563eb" : "#9CA3AF"}
+              />
+            </View>
+
+            {formData.isPregnant && (
+              <>
+                <InputField
+                  label="Pregnancy Status"
+                  value={formData.pregnancyStatus}
+                  onChangeText={(text) => updateFormData("pregnancyStatus", text)}
+                  placeholder="Trimester, complications, etc."
+                  icon={<Feather name="info" size={12} color="#6B7280" />}
+                />
+
+                <DateInputField
+                  label="Expected Delivery Date"
+                  value={formData.expectedDeliveryDate}
+                  onPress={() => handleDateFieldPress("expectedDeliveryDate")}
+                  icon={<Feather name="calendar" size={12} color="#6B7280" />}
+                />
+
+                <InputField
+                  label="ANC Visits Completed"
+                  value={formData.ancVisitsCompleted}
+                  onChangeText={(text) => updateFormData("ancVisitsCompleted", text)}
+                  placeholder="Number of ANC visits"
+                  icon={<Feather name="check-circle" size={12} color="#6B7280" />}
+                  keyboardType="numeric"
+                />
+
+                <DateInputField
+                  label="Last ANC Date"
+                  value={formData.lastAncDate}
+                  onPress={() => handleDateFieldPress("lastAncDate")}
+                  icon={<Feather name="calendar" size={12} color="#6B7280" />}
+                />
+
+                <InputField
+                  label="Supplementation Given"
+                  value={formData.supplementation}
+                  onChangeText={(text) => updateFormData("supplementation", text)}
+                  placeholder="Iron, Folic Acid, etc."
+                  icon={<FontAwesome5 name="pills" size={12} color="#6B7280" />}
+                  multiline
+                />
+
+                <InputField
+                  label="Referral Details"
+                  value={formData.referralDetails}
+                  onChangeText={(text) => updateFormData("referralDetails", text)}
+                  placeholder="PHC or hospital referrals"
+                  icon={<Ionicons name="medical" size={14} color="#6B7280" />}
+                  multiline
+                />
+              </>
+            )}
+          </View>
+        )}
+
+        {/* Child Health Section */}
+        {activeSection === "child" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Ionicons name="medkit" size={18} color="#2563eb" />
+              <Text style={styles.sectionTitle}>Child Health & Immunization</Text>
+            </View>
+
+            <DateInputField
+              label="Child's Birth Date"
+              value={formData.childBirthDate}
+              onPress={() => handleDateFieldPress("childBirthDate")}
+              icon={<Feather name="calendar" size={12} color="#6B7280" />}
+            />
+
+            <InputField
+              label="Birth Weight"
+              value={formData.birthWeight}
+              onChangeText={(text) => updateFormData("birthWeight", text)}
+              placeholder="Weight at birth (kg)"
+              icon={<FontAwesome5 name="weight" size={12} color="#6B7280" />}
+              keyboardType="numeric"
+            />
+
+            <InputField
+              label="Immunization History"
+              value={formData.immunizationHistory}
+              onChangeText={(text) => updateFormData("immunizationHistory", text)}
+              placeholder="Vaccines received with dates"
+              icon={<MaterialIcons name="vaccines" size={14} color="#6B7280" />}
+              multiline
+            />
+
+            <View style={styles.row}>
+              <View style={styles.halfInput}>
+                <DateInputField
+                  label="Last Vaccine Date"
+                  value={formData.lastVaccineDate}
+                  onPress={() => handleDateFieldPress("lastVaccineDate")}
+                  icon={<Feather name="calendar" size={10} color="#6B7280" />}
+                />
+              </View>
+              <View style={styles.halfInput}>
+                <DateInputField
+                  label="Next Vaccine Due"
+                  value={formData.nextVaccineDate}
+                  onPress={() => handleDateFieldPress("nextVaccineDate")}
+                  icon={<Feather name="calendar" size={10} color="#6B7280" />}
+                />
+              </View>
+            </View>
+
+            <View style={styles.row}>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="Current Weight"
+                  value={formData.currentWeight}
+                  onChangeText={(text) => updateFormData("currentWeight", text)}
+                  placeholder="Weight (kg)"
+                  icon={<FontAwesome5 name="weight" size={10} color="#6B7280" />}
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="Current Height"
+                  value={formData.currentHeight}
+                  onChangeText={(text) => updateFormData("currentHeight", text)}
+                  placeholder="Height (cm)"
+                  icon={<Feather name="bar-chart-2" size={12} color="#6B7280" />}
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Health Visits Section */}
+        {activeSection === "visits" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Feather name="activity" size={18} color="#2563eb" />
+              <Text style={styles.sectionTitle}>Health Visits & Checkups</Text>
+            </View>
+
+            <DateInputField
+              label="Visit Date"
+              value={formData.visitDate}
+              onPress={() => handleDateFieldPress("visitDate")}
+              icon={<Feather name="calendar" size={12} color="#6B7280" />}
+            />
+
+            <InputField
+              label="Visit Type"
+              value={formData.visitType}
+              onChangeText={(text) => updateFormData("visitType", text)}
+              placeholder="ANC, Immunization, General Checkup"
+              icon={<Ionicons name="medical" size={14} color="#6B7280" />}
+            />
+
+            <View style={styles.row}>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="Blood Pressure"
+                  value={formData.bloodPressure}
+                  onChangeText={(text) => updateFormData("bloodPressure", text)}
+                  placeholder="BP reading"
+                  icon={<Feather name="activity" size={10} color="#6B7280" />}
+                />
+              </View>
+              <View style={styles.halfInput}>
+                <InputField
+                  label="Pulse Rate"
+                  value={formData.pulse}
+                  onChangeText={(text) => updateFormData("pulse", text)}
+                  placeholder="Pulse per minute"
+                  icon={<Ionicons name="pulse" size={12} color="#6B7280" />}
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+
+            <InputField
+              label="Temperature"
+              value={formData.temperature}
+              onChangeText={(text) => updateFormData("temperature", text)}
+              placeholder="Temperature in °C"
+              icon={<Feather name="thermometer" size={12} color="#6B7280" />}
+              keyboardType="numeric"
+            />
+
+            <InputField
+              label="Symptoms & Complaints"
+              value={formData.symptoms}
+              onChangeText={(text) => updateFormData("symptoms", text)}
+              placeholder="Any symptoms or health complaints"
+              icon={<MaterialIcons name="sick" size={14} color="#6B7280" />}
+              multiline
+            />
+
+            <InputField
+              label="Treatment & Advice"
+              value={formData.treatmentGiven}
+              onChangeText={(text) => updateFormData("treatmentGiven", text)}
+              placeholder="Treatment given or advice provided"
+              icon={<Feather name="file-text" size={12} color="#6B7280" />}
+              multiline
+            />
+          </View>
+        )}
+
+        {/* Reminders Section */}
+        {activeSection === "reminders" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Ionicons name="notifications" size={18} color="#2563eb" />
+              <Text style={styles.sectionTitle}>Reminders & Follow-up</Text>
+            </View>
+
+            <InputField
+              label="Vaccination Reminders"
+              value={formData.vaccinationReminder}
+              onChangeText={(text) => updateFormData("vaccinationReminder", text)}
+              placeholder="Upcoming vaccination dates"
+              icon={<MaterialIcons name="vaccines" size={14} color="#6B7280" />}
+              multiline
+            />
+
+            <InputField
+              label="ANC Follow-up Reminders"
+              value={formData.ancFollowUpReminder}
+              onChangeText={(text) => updateFormData("ancFollowUpReminder", text)}
+              placeholder="Next ANC visit dates"
+              icon={<FontAwesome5 name="baby" size={12} color="#6B7280" />}
+              multiline
+            />
+
+            <InputField
+              label="Other Reminders"
+              value={formData.otherReminders}
+              onChangeText={(text) => updateFormData("otherReminders", text)}
+              placeholder="Any other scheduled visits or alerts"
+              icon={<Ionicons name="alert-circle" size={14} color="#6B7280" />}
+              multiline
+            />
+          </View>
+        )}
+
+        <SaveButton />
+      </ScrollView>
+
+      {/* Fix 4: Proper Date Picker Modal */}
+      <Modal visible={showDatePicker} transparent animationType="slide">
+        <TouchableWithoutFeedback onPress={handleDateCancel}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>
+                  Select {currentDateField.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+                </Text>
+                
+                <DateTimePicker
+                  value={selectedDate}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={handleDateChange}
+                  style={styles.datePicker}
+                  minimumDate={currentDateField.includes('Birth') ? new Date(1900, 0, 1) : new Date()}
+                  maximumDate={currentDateField.includes('Birth') ? new Date() : new Date(2100, 0, 1)}
+                />
+
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.cancelButton]}
+                    onPress={handleDateCancel}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.confirmButton]}
+                    onPress={handleDateConfirm}
+                  >
+                    <Text style={styles.confirmButtonText}>Select Date</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+  },
+  backButton: {
+    padding: 6,
+  },
+  headerTitle: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  placeholder: {
+    width: 34,
+  },
+  sectionNavContainer: {
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  sectionNav: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    height: 70,
+  },
+  sectionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 6,
+    borderRadius: 16,
+    backgroundColor: "#F3F4F6",
+    height: 54,
+  },
+  sectionButtonActive: {
+    backgroundColor: "#2563eb",
+  },
+  sectionButtonText: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#6B7280",
+    marginLeft: 4,
+  },
+  sectionButtonTextActive: {
+    color: "#fff",
+  },
+  formContainer: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingTop: 0,
+  },
+  section: {
+    marginBottom: 16,
+    paddingTop: 8,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginLeft: 6,
+  },
+  inputContainer: {
+    marginBottom: 12,
+  },
+  labelContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#374151",
+    marginLeft: 6,
+  },
+  textInput: {
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 14,
+    color: "#374151",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  multilineInput: {
+    minHeight: 80,
+    textAlignVertical: "top",
+  },
+  dateInput: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 10,
+    padding: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  dateInputText: {
+    fontSize: 14,
+    color: "#374151",
+  },
+  placeholderText: {
+    color: "#9CA3AF",
+  },
+  row: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  halfInput: {
+    width: "48%",
+  },
+  switchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#fff",
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    marginBottom: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  switchLabel: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  switchText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#374151",
+    marginLeft: 6,
+  },
+  saveButton: {
+    borderRadius: 14,
+    overflow: "hidden",
+    marginTop: 8,
+    marginBottom: 20,
+    shadowColor: "#2563eb",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  saveButtonDisabled: {
+    opacity: 0.7,
+  },
+  saveButtonGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  saveButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+    marginLeft: 6,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 20,
+    margin: 20,
+    width: Platform.OS === 'ios' ? '90%' : 300,
+    alignItems: "center",
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginBottom: 14,
+    textAlign: "center",
+  },
+  datePicker: {
+    width: '100%',
+    marginBottom: 16,
+  },
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: "center",
+    marginHorizontal: 4,
+  },
+  cancelButton: {
+    backgroundColor: "#F3F4F6",
+  },
+  cancelButtonText: {
+    color: "#374151",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  confirmButton: {
+    backgroundColor: "#2563eb",
+  },
+  confirmButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+});

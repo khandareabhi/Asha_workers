@@ -21,10 +21,21 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.shrinivaskumari.ashahealth"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sqlite",
+      "expo-font",
+      "expo-localization"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "80ae3764-14be-4878-985e-2dde70a42887"
+      }
     }
   }
 }
