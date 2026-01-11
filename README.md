@@ -87,6 +87,5 @@ Notes:
 - Add unit / integration tests (Jest + React Native Testing Library) for key components and services.
 - Add CI checks (lint, typecheck, unit tests) and EAS build validation.
 
----
-
+----
 File generated automatically: `README.md` — adjust project-specific details (server URLs, environment variables) as needed.
